@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Abhishek kumar for docker and kn8s and j</title>
+</head>
+<body>
+    <h1>Add New Student</h1>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">Save</button>
+    </form>
+    <a href="{% url 'student_list' %}">View All Students</a>
+</body>
+</html>
