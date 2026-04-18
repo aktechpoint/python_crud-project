@@ -18,8 +18,12 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path, include
+from django.http Import HttpResponse
+def health(request):
+    returen HttpResponse("All is ok")
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('students/', include('students.urls')),
+    path("health/", health),
 ]
