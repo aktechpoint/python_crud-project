@@ -18,7 +18,7 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path, include
-from django.http Import HttpResponse
+from django.http import HttpResponse
 def health(request):
     return HttpResponse("All is ok")
 
