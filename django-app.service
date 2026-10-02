@@ -1,0 +1,20 @@
+[Unit]
+Description=Django Application
+After=network.target
+
+[Service]
+User=jenkins
+Group=jenkins
+WorkingDirectory=/opt/django-app
+Environment="PATH=/opt/django-app/venv/bin"
+
+ExecStart=/opt/django-app/venv/bin/gunicorn \
+    --workers 3 \
+    --bind 0.0.0.0:8000 \
+    student_project.wsgi:application
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
