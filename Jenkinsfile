@@ -49,7 +49,7 @@ pipeline {
                       -e DJANGO_DEBUG=False \
                       -e DJANGO_ALLOWED_HOSTS=localhost \
                       "${IMAGE_NAME}:${BUILD_NUMBER}" \
-                      python manage.py check
+                      python3 manage.py check
                 '''
             }
         }
