@@ -10,7 +10,7 @@ pipeline {
 
     environment {
         DOCKERHUB_USER = ''
-        IMAGE_NAME = 'abhishek625/testpy:tagname'
+        IMAGE_NAME = 'abhishek625/testpy'
 
         DEPLOY_HOST = '15.252.239.24'
         DEPLOY_USER = 'deploy'
