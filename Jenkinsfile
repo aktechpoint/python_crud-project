@@ -1,147 +1,140 @@
+
 pipeline {
     agent any
 
-    parameters {
-        choice(
-            name: 'DEPLOY_ENV',
-            choices: ['dev', 'staging'],
-            description: 'Select deployment environment'
-        )
-
-        booleanParam(
-            name: 'RUN_MIGRATIONS',
-            defaultValue: true,
-            description: 'Run Django database migrations'
-        )
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
     }
 
     environment {
-        APP_DIR = '/opt/django-app'
-        PYTHON = '/usr/local/bin/python3.11'
-        VENV = '/opt/django-app/venv'
+        DOCKERHUB_USER = ''
+        IMAGE_NAME = 'abhishek625/testpy:tagname'
 
-        GIT_URL = 'https://github.com/aktechpoint/python_crud-project.git'
-        GIT_BRANCH = 'main'
-
-        SERVICE_NAME = 'django-app'
+        DEPLOY_HOST = '15.252.239.24'
+        DEPLOY_USER = 'deploy'
+        CONTAINER_NAME = 'django-app'
+        HOST_PORT = '8000'
     }
 
     stages {
-
-        stage('git Checkout') {
+        stage('Checkout') {
             steps {
-                echo "Deploying ${params.DEPLOY_ENV} environment"
-
-                git branch: "${GIT_BRANCH}",
-                    url: "${GIT_URL}"
+                checkout scm
             }
         }
 
-        stage('Prepare Application') {
+        stage('Build Docker Image') {
             steps {
                 sh '''
-                    set -e
+                    set -eu
 
-                    sudo mkdir -p ${APP_DIR}
+                    test -f manage.py
+                    test -f Dockerfile
+                    test -f requirements.txt
 
-                    sudo cp -r . ${APP_DIR}/
-
-                    sudo chown -R jenkins:jenkins ${APP_DIR}
+                    docker build \
+                      -t "${IMAGE_NAME}:${BUILD_NUMBER}" \
+                      -t "${IMAGE_NAME}:latest" .
                 '''
             }
         }
 
-        stage('Create Virtual Environment') {
+        stage('Django System Check') {
             steps {
                 sh '''
-                    set -e
-
-                    if [ ! -d "${VENV}" ]; then
-                        ${PYTHON} -m venv ${VENV}
-                    fi
-
-                    ${VENV}/bin/python --version
+                    docker run --rm \
+                      -e DJANGO_SECRET_KEY=ci-temporary-secret \
+                      -e DJANGO_DEBUG=False \
+                      -e DJANGO_ALLOWED_HOSTS=localhost \
+                      "${IMAGE_NAME}:${BUILD_NUMBER}" \
+                      python manage.py check
                 '''
             }
         }
 
-        stage('Install Dependencies') {
+        stage('Push to Docker Hub') {
             steps {
-                sh '''
-                    set -e
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-creds',
+                        usernameVariable: 'DH_USER',
+                        passwordVariable: 'DH_TOKEN'
+                    )
+                ]) {
+                    sh '''
+                        set -eu
 
-                    ${VENV}/bin/python -m pip install --upgrade pip
+                        echo "$DH_TOKEN" | docker login \
+                          --username "$DH_USER" \
+                          --password-stdin
 
-                    ${VENV}/bin/pip install -r ${APP_DIR}/requirements.txt
-                '''
-            }
-        }
+                        docker push "${IMAGE_NAME}:${BUILD_NUMBER}"
+                        docker push "${IMAGE_NAME}:latest"
 
-        stage('Django Check') {
-            steps {
-                sh '''
-                    set -e
-
-                    cd ${APP_DIR}
-
-                    ${VENV}/bin/python manage.py check
-                '''
-            }
-        }
-
-        stage('Database Migration') {
-            when {
-                expression {
-                    return params.RUN_MIGRATIONS
+                        docker logout
+                    '''
                 }
             }
+        }
 
+        stage('Deploy to Remote Ubuntu') {
             steps {
-                sh '''
-                    set -e
+                sshagent(credentials: ['deploy-server-key']) {
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'dockerhub-creds',
+                            usernameVariable: 'DH_USER',
+                            passwordVariable: 'DH_TOKEN'
+                        )
+                    ]) {
+                        sh '''
+                            set -eu
 
-                    cd ${APP_DIR}
+                            # Authenticate on the deployment server.
+                            printf '%s' "$DH_TOKEN" |
+                              ssh -o BatchMode=yes \
+                                "$DEPLOY_USER@$DEPLOY_HOST" \
+                                "docker login -u '$DH_USER' --password-stdin"
 
-                    ${VENV}/bin/python manage.py migrate --noinput
-                '''
+                            # Pull the exact image produced by this build.
+                            ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+                              "docker pull '$IMAGE_NAME:$BUILD_NUMBER' &&
+                               docker logout"
+
+                            # Replace the running container.
+                            ssh "$DEPLOY_USER@$DEPLOY_HOST" "
+                              docker rm -f '$CONTAINER_NAME' 2>/dev/null || true
+                              docker run -d \
+                                --name '$CONTAINER_NAME' \
+                                --restart unless-stopped \
+                                --env-file /opt/django-app/.env \
+                                -p '$HOST_PORT:8000' \
+                                '$IMAGE_NAME:$BUILD_NUMBER'
+                            "
+                        '''
+                    }
+                }
             }
         }
 
-        stage('Collect Static Files') {
+        stage('Verify Deployment') {
             steps {
                 sh '''
-                    set -e
+                    set -eu
 
-                    cd ${APP_DIR}
+                    for i in $(seq 1 20); do
+                      if curl -fsS \
+                        "http://${DEPLOY_HOST}:${HOST_PORT}/health/"; then
+                        echo "Django deployment verified"
+                        exit 0
+                      fi
+                      sleep 3
+                    done
 
-                    ${VENV}/bin/python manage.py collectstatic --noinput
-                '''
-            }
-        }
-
-        stage('Restart Django') {
-            steps {
-                sh '''
-                    set -e
-        
-                    echo "Restarting Django application..."
-        
-                    sudo -n /usr/local/bin/restart-django-app.sh
-        
-                    echo "Django service restarted and is active."
-                '''
-            }
-        }
-
-        stage('Health Check') {
-            steps {
-                sh '''
-                    set -e
-
-                    curl -f http://127.0.0.1:8000/health/ || \
-                    curl -f http://127.0.0.1:8000/
-
-                    echo "Django application is healthy"
+                    echo "Health check failed"
+                    exit 1
                 '''
             }
         }
@@ -149,16 +142,19 @@ pipeline {
 
     post {
         success {
-            echo "Django deployment completed successfully."
+            echo "Deployment successful: ${IMAGE_NAME}:${BUILD_NUMBER}"
         }
 
         failure {
-            echo "Django deployment failed."
+            echo 'Pipeline failed. Review Console Output and remote container logs.'
         }
 
         always {
-            echo "Cleaning Jenkins workspace..."
-            cleanWs()
+            sh '''
+                docker image rm \
+                  "${IMAGE_NAME}:${BUILD_NUMBER}" \
+                  "${IMAGE_NAME}:latest" 2>/dev/null || true
+            '''
         }
     }
 }
