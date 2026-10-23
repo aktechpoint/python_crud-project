@@ -41,18 +41,22 @@ pipeline {
             }
         }
 
+       
         stage('Django System Check') {
             steps {
                 sh '''
+                    set -eu
+        
                     docker run --rm \
                       -e DJANGO_SECRET_KEY=ci-temporary-secret \
                       -e DJANGO_DEBUG=False \
                       -e DJANGO_ALLOWED_HOSTS=localhost \
                       "${IMAGE_NAME}:${BUILD_NUMBER}" \
-                      python3 manage.py check
+                      check
                 '''
             }
         }
+
 
         stage('Push to Docker Hub') {
             steps {
